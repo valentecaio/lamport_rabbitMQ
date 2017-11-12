@@ -22,9 +22,11 @@ MSG_RESPONSE = 'RESPONSE'
 MSG_RELEASE = 'RELEASE'
 MSG_RESPONSE_PERMISSION_GRANTED = 'GRANTED_PERMISSION'
 MSG_RESPONSE_NO_PERMISSION_GRANTED = 'NO_PERMISSION'
+MSG_SEPARATOR = ' '
 
 # thread-safe requests queue
-requests = queue.Queue()
+requests = queue.PriorityQueue()
+clock = 0
 
 
 '''
@@ -46,19 +48,29 @@ def enter_critical_section(seconds):
     print('EXIT critical section')
 
 
-def send_request(request_time):
+def increment_clock():
+    global clock
+    clock += 1
+    if DEBUG:
+        print(DEBUG_FLAG, "incremented clock to", clock)
+
+
+def send_request(access_duration):
     global requests
 
+    # increment timestamp before creating request
+    increment_clock()
+
     # 1- push request to own queue
-    request = Request(request_time, own_queue_name)
-    requests.put_nowait(request)
+    request = Request(clock, own_queue_name, access_duration)
+    requests.put_nowait((request.timestamp, request))
 
     # 2- broadcast request msg
-    msg = MSG_REQUEST + ' ' + str(request_time)
+    msg = MSG_REQUEST + MSG_SEPARATOR + str(clock)
     channel.basic_publish(exchange=EXCHANGE, routing_key=own_queue_name, body=msg)
 
     if DEBUG:
-        print(DEBUG_FLAG, 'request sent')
+        print(DEBUG_FLAG, 'sent:', msg)
 
 
 '''
@@ -70,6 +82,7 @@ def receive_data():
     def callback(ch, method, properties, body):
         global waiting_responses
         global requests
+        global clock
 
         sender_name = method.routing_key
 
@@ -82,25 +95,34 @@ def receive_data():
         if DEBUG:
             print(DEBUG_FLAG, "received %r from %r" % (body, method.routing_key))
 
-        # decode and treat message
-        decoded_msg = body.decode('UTF-8').split()
-        if decoded_msg[0] == MSG_REQUEST:
+        # decode message
+        decoded_msg = body.decode('UTF-8').split(MSG_SEPARATOR)
+        msg_type = decoded_msg[0]
+        msg_timestamp = int(decoded_msg[1])
+
+        # recalculate timestamp
+        clock = max(clock, msg_timestamp)
+        increment_clock()
+
+        if msg_type == MSG_REQUEST:
             print("client %s wants to enter in critical section" % (sender_name, ))
+
             # put received request in requests queue
-            requests.put_nowait(Request(int(decoded_msg[1]), sender_name))
+            request = Request(msg_timestamp, sender_name)
+            requests.put_nowait((request.timestamp, request))
 
             # answer request
             # WARNING: this get method is not threading safe
-            first_req = requests[0]
-            if first_req.owner_name == sender_name:
+            smaller_timestamp, first_request = requests.queue[0]
+            if smaller_timestamp == msg_timestamp:
                 response_msg = MSG_RESPONSE_PERMISSION_GRANTED
             else:
                 response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
 
 
-        elif decoded_msg[0] == MSG_RELEASE:
+        elif msg_type == MSG_RELEASE:
             pass
-        elif decoded_msg[0] == MSG_RESPONSE:
+        elif msg_type == MSG_RESPONSE:
             # after receiving all responses, stop waiting
             # TODO: only set boolean to False after receiving ALL responses
             waiting_responses = False
