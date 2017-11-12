@@ -2,6 +2,7 @@
 from time import sleep
 import pika
 import threading
+import queue
 
 from core import *
 
@@ -10,12 +11,20 @@ try:
 except:
     pprint = print
 
+
+DEBUG = True
+
 ''' constants '''
 EXCHANGE = 'broadcast'
-MSG_REQUEST = 'REQUEST'
 DEBUG_FLAG = '[DEBUG]'
+MSG_REQUEST = 'REQUEST'
+MSG_RESPONSE = 'RESPONSE'
+MSG_RELEASE = 'RELEASE'
+MSG_RESPONSE_PERMISSION_GRANTED = 'GRANTED_PERMISSION'
+MSG_RESPONSE_NO_PERMISSION_GRANTED = 'NO_PERMISSION'
 
-requests = []
+# thread-safe requests queue
+requests = queue.Queue()
 
 
 '''
@@ -38,31 +47,63 @@ def enter_critical_section(seconds):
 
 
 def send_request(request_time):
+    global requests
+
     # 1- push request to own queue
     request = Request(request_time, own_queue_name)
-    requests.append(request)
+    requests.put_nowait(request)
 
     # 2- broadcast request msg
     msg = MSG_REQUEST + ' ' + str(request_time)
     channel.basic_publish(exchange=EXCHANGE, routing_key=own_queue_name, body=msg)
 
-    print(DEBUG_FLAG, 'request sent')
+    if DEBUG:
+        print(DEBUG_FLAG, 'request sent')
 
 
+'''
+1- After receiving a request, pushing the request in its own request queue (ordered by time stamps) and reply with a time stamp.
+2- After receiving release message, remove the corresponding request from its own request queue.
+3- If own request is at the head of its queue and all replies have been received, enter critical section.
+'''
 def receive_data():
     def callback(ch, method, properties, body):
         global waiting_responses
+        global requests
+
+        sender_name = method.routing_key
 
         # ignore own messages
-        if method.routing_key == own_queue_name:
-            print(DEBUG_FLAG, "ignoring own message")
+        if sender_name == own_queue_name:
+            if DEBUG:
+                print(DEBUG_FLAG, "ignoring own message")
             return
 
-        print(DEBUG_FLAG, "received %r from %r" % (body, method.routing_key))
+        if DEBUG:
+            print(DEBUG_FLAG, "received %r from %r" % (body, method.routing_key))
 
-        # after receiving all responses, stop waiting
-        # TODO: only set boolean as False after receiving ALL responses
-        waiting_responses = False
+        # decode and treat message
+        decoded_msg = body.decode('UTF-8').split()
+        if decoded_msg[0] == MSG_REQUEST:
+            print("client %s wants to enter in critical section" % (sender_name, ))
+            # put received request in requests queue
+            requests.put_nowait(Request(int(decoded_msg[1]), sender_name))
+
+            # answer request
+            # WARNING: this get method is not threading safe
+            first_req = requests[0]
+            if first_req.owner_name == sender_name:
+                response_msg = MSG_RESPONSE_PERMISSION_GRANTED
+            else:
+                response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
+
+
+        elif decoded_msg[0] == MSG_RELEASE:
+            pass
+        elif decoded_msg[0] == MSG_RESPONSE:
+            # after receiving all responses, stop waiting
+            # TODO: only set boolean to False after receiving ALL responses
+            waiting_responses = False
 
     # start to listen to broadcast msgs
     channel.basic_consume(callback, queue=own_queue_name, no_ack=True)
