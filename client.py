@@ -122,17 +122,16 @@ def receive_data():
             requests.put_nowait((request.timestamp, request))
 
             # get first element from queue
-            # WARNING: this get method is not threading safe
-            smaller_timestamp, first_request = requests.queue[0]
+            smaller_timestamp, first_request = requests.get_nowait()   # equivalent to get(False)
 
             # answer request
             if smaller_timestamp == msg_timestamp:
-                # remove request from own queue (first element)
-                requests.get_nowait()   # equivalent to get(False)
-
                 # answer requester
                 send_msg(MSG_RESPONSE_PERMISSION_GRANTED, props.reply_to)
             else:
+                # put element back on the queue
+                requests.put_nowait((smaller_timestamp, first_request))
+
                 response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
 
         elif msg_type == MSG_RELEASE:
