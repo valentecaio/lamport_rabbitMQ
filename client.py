@@ -1,28 +1,21 @@
 #!/usr/bin/env python
-from time import sleep
-import pika
-import threading
 import queue
+import threading
+from time import sleep
+
+import pika
 
 from core import *
-
-try:
-    from pprint import pprint
-except:
-    pprint = print
-
 
 DEBUG = True
 
 ''' constants '''
-EXCHANGE = 'broadcast'
+BROADCAST = 'broadcast'
 DEBUG_FLAG = '[DEBUG]'
 MSG_REQUEST = 'REQUEST'
-MSG_RESPONSE = 'RESPONSE'
 MSG_RELEASE = 'RELEASE'
 MSG_RESPONSE_PERMISSION_GRANTED = 'GRANTED_PERMISSION'
 MSG_RESPONSE_NO_PERMISSION_GRANTED = 'NO_PERMISSION'
-MSG_SEPARATOR = ' '
 
 # thread-safe requests queue
 requests = queue.PriorityQueue()
@@ -63,7 +56,7 @@ def increment_clock():
 
 
 def send_msg(msg_type, routing_key, is_broadcast=False):
-    exchange = EXCHANGE if is_broadcast else ''
+    exchange = BROADCAST if is_broadcast else ''
     props = pika.BasicProperties(reply_to=own_queue_name, correlation_id=str(clock),)
     channel.basic_publish(exchange=exchange, routing_key=routing_key, body=msg_type, properties=props)
     if DEBUG:
@@ -194,7 +187,7 @@ if __name__ == '__main__':
     channel = connection.channel()
 
     # connect to exchange broadcast
-    channel.exchange_declare(exchange=EXCHANGE, exchange_type='fanout')
+    channel.exchange_declare(exchange=BROADCAST, exchange_type='fanout')
 
     # create own queue
     # exclusive tag is for deleting the queue when disconnecting
@@ -203,6 +196,6 @@ if __name__ == '__main__':
     print("own queue name = %s", own_queue_name)
 
     # bind own queue to exchange
-    channel.queue_bind(exchange=EXCHANGE, queue=own_queue_name)
+    channel.queue_bind(exchange=BROADCAST, queue=own_queue_name)
 
     run_threads()
