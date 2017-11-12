@@ -27,6 +27,7 @@ MSG_SEPARATOR = ' '
 # thread-safe requests queue
 requests = queue.PriorityQueue()
 clock = 0
+# TODO: synchronize clocks when a new client arrives
 
 
 '''
@@ -55,6 +56,20 @@ def increment_clock():
         print(DEBUG_FLAG, "incremented clock to", clock)
 
 
+'''
+    # reply_to => the queue who triggered the request (and should receive the response)
+    # correlation_id => id of the request. Must by a string
+'''
+
+
+def send_msg(msg_type, routing_key, is_broadcast=False):
+    exchange = EXCHANGE if is_broadcast else ''
+    props = pika.BasicProperties(reply_to=own_queue_name, correlation_id=str(clock),)
+    channel.basic_publish(exchange=exchange, routing_key=routing_key, body=msg_type, properties=props)
+    if DEBUG:
+        print(DEBUG_FLAG, '[SEND] msg: %s, timestamp: %s, routing_key: %s' % (msg_type, clock, routing_key))
+
+
 def send_request(access_duration):
     global requests
 
@@ -66,11 +81,7 @@ def send_request(access_duration):
     requests.put_nowait((request.timestamp, request))
 
     # 2- broadcast request msg
-    msg = MSG_REQUEST + MSG_SEPARATOR + str(clock)
-    channel.basic_publish(exchange=EXCHANGE, routing_key=own_queue_name, body=msg)
-
-    if DEBUG:
-        print(DEBUG_FLAG, 'sent:', msg)
+    send_msg(MSG_REQUEST, own_queue_name, True)
 
 
 '''
@@ -79,50 +90,54 @@ def send_request(access_duration):
 3- If own request is at the head of its queue and all replies have been received, enter critical section.
 '''
 def receive_data():
-    def callback(ch, method, properties, body):
+    def callback(ch, method, props, body):
         global waiting_responses
         global requests
         global clock
 
-        sender_name = method.routing_key
+        sender_name = props.reply_to
 
         # ignore own messages
         if sender_name == own_queue_name:
             if DEBUG:
-                print(DEBUG_FLAG, "ignoring own message")
+                print(DEBUG_FLAG, "[RECEIVE] ignoring own message")
             return
 
-        if DEBUG:
-            print(DEBUG_FLAG, "received %r from %r" % (body, method.routing_key))
-
         # decode message
-        decoded_msg = body.decode('UTF-8').split(MSG_SEPARATOR)
-        msg_type = decoded_msg[0]
-        msg_timestamp = int(decoded_msg[1])
+        msg_type = body.decode('UTF-8')
+        msg_timestamp = int(props.correlation_id)
 
-        # recalculate timestamp
+        if DEBUG:
+            print(DEBUG_FLAG, "[RECEIVE] msg: %r, timestamp: %s, sender: %r" % (body, msg_timestamp, sender_name))
+
+        # recalculate clock
         clock = max(clock, msg_timestamp)
         increment_clock()
 
         if msg_type == MSG_REQUEST:
-            print("client %s wants to enter in critical section" % (sender_name, ))
+            print("node %s wants to enter in critical section" % (sender_name, ))
 
             # put received request in requests queue
             request = Request(msg_timestamp, sender_name)
             requests.put_nowait((request.timestamp, request))
 
-            # answer request
+            # get first element from queue
             # WARNING: this get method is not threading safe
             smaller_timestamp, first_request = requests.queue[0]
+
+            # answer request
             if smaller_timestamp == msg_timestamp:
-                response_msg = MSG_RESPONSE_PERMISSION_GRANTED
+                # remove request from own queue (first element)
+                requests.get_nowait()   # equivalent to get(False)
+
+                # answer requester
+                send_msg(MSG_RESPONSE_PERMISSION_GRANTED, props.reply_to)
             else:
                 response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
 
-
         elif msg_type == MSG_RELEASE:
             pass
-        elif msg_type == MSG_RESPONSE:
+        elif msg_type == MSG_RESPONSE_PERMISSION_GRANTED:
             # after receiving all responses, stop waiting
             # TODO: only set boolean to False after receiving ALL responses
             waiting_responses = False

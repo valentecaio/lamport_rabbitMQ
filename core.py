@@ -6,3 +6,7 @@ class Request:
 
     def __repr__(self):
         return "(queue_name: %s, timestamp: %s, access_duration: %s)" % (self.owner_name, self.timestamp, self.access_duration)
+
+    # used by PriorityQueue for comparing elements
+    def __lt__(self, other):
+        return self.timestamp < other.timestamp
