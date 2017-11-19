@@ -36,9 +36,9 @@ Requesting process
 
 def enter_critical_section(seconds):
     print('ENTER critical section ')
-    for _ in range(0, 5*seconds):
-        sleep(0.2)
-        print('.')
+    for i in range(0, seconds):
+        sleep(1)
+        print('work done: ' + str(int(100*(i/seconds))) + '%')
     print('EXIT critical section')
 
 
@@ -51,16 +51,18 @@ def increment_clock():
 
 '''
     # reply_to => the queue who triggered the request (and should receive the response)
-    # correlation_id => id of the request. Must by a string
+    # correlation_id (string) => id of the request
 '''
 
 
 def send_msg(msg_type, routing_key, is_broadcast=False):
     exchange = BROADCAST if is_broadcast else ''
     props = pika.BasicProperties(reply_to=own_queue_name, correlation_id=str(clock),)
+    channel.confirm_delivery()
     channel.basic_publish(exchange=exchange, routing_key=routing_key, body=msg_type, properties=props)
     if DEBUG:
         print(DEBUG_FLAG, '[SEND] msg: %s, timestamp: %s, routing_key: %s' % (msg_type, clock, routing_key))
+
 
 
 def send_request(access_duration):
@@ -117,22 +119,35 @@ def receive_data():
             # get first element from queue
             smaller_timestamp, first_request = requests.get_nowait()   # equivalent to get(False)
 
-            # answer request
+            # accept or refuse request
             if smaller_timestamp == msg_timestamp:
                 response_msg = MSG_RESPONSE_PERMISSION_GRANTED
             else:
                 response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
-                # put element back on queue
-                requests.put_nowait((smaller_timestamp, first_request))
 
+            # put element back on queue
+            requests.put_nowait((smaller_timestamp, first_request))
+
+            # send response
             send_msg(response_msg, props.reply_to)
 
         elif msg_type == MSG_RELEASE:
-            pass
+            # remove first element from queue
+            requests.get_nowait()
+
         elif msg_type == MSG_RESPONSE_PERMISSION_GRANTED:
             # after receiving all responses, stop waiting
             # TODO: only set boolean to False after receiving ALL responses
             waiting_responses = False
+
+            if not waiting_responses:
+                # get first element from queue
+                smaller_timestamp, my_request = requests.get_nowait()
+
+                enter_critical_section(my_request.access_duration)
+
+                # warn other clients that the use of CS ended
+                send_msg(MSG_RELEASE, own_queue_name, True)
 
     # start to listen to broadcast msgs
     channel.basic_consume(callback, queue=own_queue_name, no_ack=True)
@@ -149,9 +164,9 @@ def read_keyboard():
         try:
             user_input = input("> ")
             # ignore messages when waiting responses
-            if waiting_responses:
-                print("Request ignored: waiting responses for last request")
-                continue
+            #if waiting_responses:
+            #    print("Request ignored: waiting responses for last request")
+            #    continue
             request_time = int(user_input)
             # send request and wait for responses
             send_request(request_time)
