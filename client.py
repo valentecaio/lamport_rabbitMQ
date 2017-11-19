@@ -119,13 +119,13 @@ def receive_data():
 
             # answer request
             if smaller_timestamp == msg_timestamp:
-                # answer requester
-                send_msg(MSG_RESPONSE_PERMISSION_GRANTED, props.reply_to)
+                response_msg = MSG_RESPONSE_PERMISSION_GRANTED
             else:
-                # put element back on the queue
+                response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
+                # put element back on queue
                 requests.put_nowait((smaller_timestamp, first_request))
 
-                response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
+            send_msg(response_msg, props.reply_to)
 
         elif msg_type == MSG_RELEASE:
             pass
