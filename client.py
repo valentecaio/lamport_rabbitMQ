@@ -51,13 +51,13 @@ def increment_clock():
 
 '''
     # reply_to => the queue who triggered the request (and should receive the response)
-    # correlation_id (string) => id of the request
+    # timestamp (int) => timestamp of the request
 '''
 
 
 def send_msg(msg_type, routing_key, is_broadcast=False):
     exchange = BROADCAST if is_broadcast else ''
-    props = pika.BasicProperties(reply_to=own_queue_name, correlation_id=str(clock),)
+    props = pika.BasicProperties(reply_to=own_queue_name, timestamp=clock,)
     channel.confirm_delivery()
     channel.basic_publish(exchange=exchange, routing_key=routing_key, body=msg_type, properties=props)
     if DEBUG:
@@ -100,7 +100,7 @@ def receive_data():
 
         # decode message
         msg_type = body.decode('UTF-8')
-        msg_timestamp = int(props.correlation_id)
+        msg_timestamp = props.timestamp
 
         if DEBUG:
             print(DEBUG_FLAG, "[RECEIVE] msg: %r, timestamp: %s, sender: %r" % (body, msg_timestamp, sender_name))
