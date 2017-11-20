@@ -14,8 +14,7 @@ BROADCAST = 'broadcast'
 DEBUG_FLAG = '[DEBUG]'
 MSG_REQUEST = 'REQUEST'
 MSG_RELEASE = 'RELEASE'
-MSG_RESPONSE_PERMISSION_GRANTED = 'GRANTED_PERMISSION'
-MSG_RESPONSE_NO_PERMISSION_GRANTED = 'NO_PERMISSION'
+MSG_PERMISSION_GRANTED = 'GRANTED_PERMISSION'
 
 # thread-safe requests queue
 requests = queue.PriorityQueue()
@@ -121,21 +120,19 @@ def receive_data():
 
             # accept or refuse request
             if smaller_timestamp == msg_timestamp:
-                response_msg = MSG_RESPONSE_PERMISSION_GRANTED
-            else:
-                response_msg = MSG_RESPONSE_NO_PERMISSION_GRANTED
+                response_msg = MSG_PERMISSION_GRANTED
+                # send response
+                send_msg(response_msg, props.reply_to)
 
             # put element back on queue
             requests.put_nowait((smaller_timestamp, first_request))
 
-            # send response
-            send_msg(response_msg, props.reply_to)
 
         elif msg_type == MSG_RELEASE:
             # remove first element from queue
             requests.get_nowait()
 
-        elif msg_type == MSG_RESPONSE_PERMISSION_GRANTED:
+        elif msg_type == MSG_PERMISSION_GRANTED:
             # after receiving all responses, stop waiting
             # TODO: only set boolean to False after receiving ALL responses
             waiting_responses = False
