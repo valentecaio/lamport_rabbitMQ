@@ -15,11 +15,18 @@ DEBUG_FLAG = '[DEBUG]'
 MSG_REQUEST = 'REQUEST'
 MSG_RELEASE = 'RELEASE'
 MSG_PERMISSION_GRANTED = 'GRANTED_PERMISSION'
+MSG_NETWORK_LENGTH_REQUEST = 'NETWORK_LENGTH'
+MSG_NETWORK_LENGTH_ACK = 'NETWORK_LENGTH_ACK'
+
 
 # thread-safe requests queue
 requests = queue.PriorityQueue()
 clock = 0
-# TODO: synchronize clocks when a new client arrives
+network_length = 1
+received_permissions = 0
+
+own_queue_name = ''
+waiting_responses = False
 
 
 '''
@@ -34,7 +41,7 @@ Requesting process
 
 
 def enter_critical_section(seconds):
-    print('ENTER critical section ')
+    print('ENTER critical section for', seconds, 'seconds')
     for i in range(0, seconds):
         sleep(1)
         print('work done: ' + str(int(100*(i/seconds))) + '%')
@@ -45,7 +52,7 @@ def increment_clock():
     global clock
     clock += 1
     if DEBUG:
-        print(DEBUG_FLAG, "incremented clock to", clock)
+        print(DEBUG_FLAG, "[CLOCK] incremented clock to", clock)
 
 
 '''
@@ -61,7 +68,6 @@ def send_msg(msg_type, routing_key, is_broadcast=False):
     channel.basic_publish(exchange=exchange, routing_key=routing_key, body=msg_type, properties=props)
     if DEBUG:
         print(DEBUG_FLAG, '[SEND] msg: %s, timestamp: %s, routing_key: %s' % (msg_type, clock, routing_key))
-
 
 
 def send_request(access_duration):
@@ -88,13 +94,13 @@ def receive_data():
         global waiting_responses
         global requests
         global clock
+        global network_length
+        global received_permissions
 
         sender_name = props.reply_to
 
         # ignore own messages
         if sender_name == own_queue_name:
-            if DEBUG:
-                print(DEBUG_FLAG, "[RECEIVE] ignoring own message")
             return
 
         # decode message
@@ -109,8 +115,6 @@ def receive_data():
         increment_clock()
 
         if msg_type == MSG_REQUEST:
-            print("node %s wants to enter in critical section" % (sender_name, ))
-
             # put received request in requests queue
             request = Request(msg_timestamp, sender_name)
             requests.put_nowait((request.timestamp, request))
@@ -127,17 +131,27 @@ def receive_data():
             # put element back on queue
             requests.put_nowait((smaller_timestamp, first_request))
 
-
         elif msg_type == MSG_RELEASE:
             # remove first element from queue
             requests.get_nowait()
 
+        elif msg_type == MSG_NETWORK_LENGTH_REQUEST:
+            network_length += 1
+            print("[NETWORK] New client on the system:", network_length, 'clients')
+            # respond with ack
+            send_msg(MSG_NETWORK_LENGTH_ACK, props.reply_to)
+
+        elif msg_type == MSG_NETWORK_LENGTH_ACK:
+            network_length += 1
+
         elif msg_type == MSG_PERMISSION_GRANTED:
             # after receiving all responses, stop waiting
-            # TODO: only set boolean to False after receiving ALL responses
-            waiting_responses = False
+            received_permissions += 1
 
-            if not waiting_responses:
+            if received_permissions == (network_length-1):
+                waiting_responses = False
+                received_permissions = 0
+
                 # get first element from queue
                 smaller_timestamp, my_request = requests.get_nowait()
 
@@ -159,7 +173,7 @@ def read_keyboard():
 
     while 1:
         try:
-            user_input = input("> ")
+            user_input = input("")
             # ignore messages when waiting responses
             #if waiting_responses:
             #    print("Request ignored: waiting responses for last request")
@@ -189,12 +203,8 @@ def run_threads():
 
 
 if __name__ == '__main__':
-    global own_queue_name
-    global waiting_responses
-
-    waiting_responses = False
-
     # start connection
+    print('Starting connection')
     connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
     channel = connection.channel()
 
@@ -209,5 +219,8 @@ if __name__ == '__main__':
 
     # bind own queue to exchange
     channel.queue_bind(exchange=BROADCAST, queue=own_queue_name)
+
+    # request network length
+    send_msg(MSG_NETWORK_LENGTH_REQUEST, own_queue_name, is_broadcast=True)
 
     run_threads()
