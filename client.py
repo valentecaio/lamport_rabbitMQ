@@ -5,6 +5,11 @@ from time import sleep
 
 import pika
 
+try:
+    from pprint import pprint
+except:
+    pprint = print
+
 from core import *
 
 DEBUG = True
@@ -55,6 +60,15 @@ def increment_clock():
         print(DEBUG_FLAG, "[CLOCK] incremented clock to", clock)
 
 
+def requests_put(request):
+    requests.put_nowait(request)
+    pprint(requests.queue)
+
+
+def requests_get():
+    pprint(requests.queue)
+    return requests.get_nowait()   # equivalent to get(False)
+
 '''
     # reply_to => the queue who triggered the request (and should receive the response)
     # timestamp (int) => timestamp of the request
@@ -78,7 +92,7 @@ def send_request(access_duration):
 
     # 1- push request to own queue
     request = Request(clock, own_queue_name, access_duration)
-    requests.put_nowait((request.timestamp, request))
+    requests_put(request)
 
     # 2- broadcast request msg
     send_msg(MSG_REQUEST, own_queue_name, True)
@@ -117,23 +131,30 @@ def receive_data():
         if msg_type == MSG_REQUEST:
             # put received request in requests queue
             request = Request(msg_timestamp, sender_name)
-            requests.put_nowait((request.timestamp, request))
+            requests_put(request)
 
             # get first element from queue
-            smaller_timestamp, first_request = requests.get_nowait()   # equivalent to get(False)
+            first_request = requests_get()
 
             # accept or refuse request
-            if smaller_timestamp == msg_timestamp:
+            if first_request.timestamp == msg_timestamp:
                 response_msg = MSG_PERMISSION_GRANTED
                 # send response
                 send_msg(response_msg, props.reply_to)
 
             # put element back on queue
-            requests.put_nowait((smaller_timestamp, first_request))
+            requests_put(first_request)
 
         elif msg_type == MSG_RELEASE:
-            # remove first element from queue
-            requests.get_nowait()
+            # remove first element from queue, since it was released by its owner
+            if not requests.empty():
+                requests_get()
+
+            # send permission message to next element in the queue
+            if not requests.empty():
+                req = requests_get()
+                send_msg(MSG_PERMISSION_GRANTED, req.owner_name)
+                requests_put(req)
 
         elif msg_type == MSG_NETWORK_LENGTH_REQUEST:
             network_length += 1
@@ -149,18 +170,19 @@ def receive_data():
             received_permissions += 1
 
             if received_permissions == (network_length-1):
-                waiting_responses = False
-                received_permissions = 0
+                # get first element from queue and check if its correct before continuing
+                first_request = requests_get()
 
-                # get first element from queue
-                smaller_timestamp, my_request = requests.get_nowait()
+                if first_request.owner_name == own_queue_name:
+                    waiting_responses = False
+                    received_permissions = 0
 
-                enter_critical_section(my_request.access_duration)
+                    enter_critical_section(first_request.access_duration)
 
-                # warn other clients that the use of CS ended
-                send_msg(MSG_RELEASE, own_queue_name, True)
+                    # warn other clients that the use of CS ended
+                    send_msg(MSG_RELEASE, own_queue_name, True)
 
-    # start to listen to broadcast msgs
+    # start to listen to messages
     channel.basic_consume(callback, queue=own_queue_name, no_ack=True)
     channel.start_consuming()
 
