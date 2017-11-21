@@ -45,7 +45,7 @@ Requesting process
 '''
 
 
-def use_critical_section(seconds):
+def simulate_critical_section_usage(seconds):
     print('ENTER critical section for', seconds, 'seconds')
     for i in range(0, seconds):
         sleep(1)
@@ -101,17 +101,36 @@ def send_request(access_duration):
     send_msg(MSG_REQUEST, own_queue_name, True)
 
 
-def enter_critical_section(request):
+# process next element in the queue
+def process_next_element():
+    if requests.empty():
+        return
+
+    req = requests_get()
+    # if node is the owner, enter in CS, else, send permission
+    if req.owner_name == own_queue_name:
+        if received_permissions == (network_length - 1):
+            use_critical_section(req)
+        else:
+            requests_put(req)
+    else:
+        send_msg(MSG_PERMISSION_GRANTED, req.owner_name)
+        requests_put(req)
+
+
+def use_critical_section(request):
     global waiting_responses
     global received_permissions
 
     waiting_responses = False
     received_permissions = 0
 
-    use_critical_section(request.access_duration)
+    simulate_critical_section_usage(request.access_duration)
 
     # warn other clients that the use of CS is over
     send_msg(MSG_RELEASE, own_queue_name, True)
+
+    process_next_element()
 
 
 '''
@@ -166,18 +185,7 @@ def receive_data():
             if not requests.empty():
                 requests_get()
 
-            # process next element in the queue
-            if not requests.empty():
-                req = requests_get()
-                # if node is the owner, enter in CS, else, send permission
-                if req.owner_name == own_queue_name:
-                    if received_permissions == (network_length - 1):
-                        enter_critical_section(req)
-                    else:
-                        requests_put(req)
-                else:
-                    send_msg(MSG_PERMISSION_GRANTED, req.owner_name)
-                    requests_put(req)
+            process_next_element()
 
         elif msg_type == MSG_NETWORK_LENGTH_REQUEST:
             network_length += 1
@@ -191,12 +199,13 @@ def receive_data():
         elif msg_type == MSG_PERMISSION_GRANTED:
             # after receiving all responses, stop waiting
             received_permissions += 1
+            print(DEBUG_FLAG, '[PERMISSION]', received_permissions)
 
             if received_permissions == (network_length-1):
                 # get first element from queue and check if its correct before continuing
                 req = requests_get()
                 if req.owner_name == own_queue_name:
-                    enter_critical_section(req)
+                    use_critical_section(req)
 
     # start to listen to messages
     channel.basic_consume(callback, queue=own_queue_name, no_ack=True)
