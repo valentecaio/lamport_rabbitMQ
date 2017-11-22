@@ -12,39 +12,29 @@ except:
 
 from core import *
 
+# set as False to hide logs
 DEBUG = True
 
 ''' constants '''
-BROADCAST = 'broadcast'
-DEBUG_FLAG = '[DEBUG]'
-MSG_REQUEST = 'REQUEST'
-MSG_RELEASE = 'RELEASE'
-MSG_PERMISSION_GRANTED = 'GRANTED_PERMISSION'
-MSG_NETWORK_LENGTH_REQUEST = 'NETWORK_LENGTH'
-MSG_NETWORK_LENGTH_ACK = 'NETWORK_LENGTH_ACK'
+DEBUG_FLAG = '[DEBUG]'                          # flag used in logs
+BROADCAST = 'broadcast'                         # id of exchange common to all nodes (used as broadcast)
+MSG_REQUEST = 'REQUEST'                         # Lamport request message prefix
+MSG_RELEASE = 'RELEASE'                         # Lamport release message prefix
+MSG_PERMISSION = 'PERMISSION'                   # Lamport granted permission message prefix
+MSG_NETWORK_SIZE_REQUEST = 'NETWORK_SIZE'       # network size request message prefix
+MSG_NETWORK_SIZE_ACK = 'NETWORK_SIZE_ACK'       # network size response message prefix
 
 
-# thread-safe requests queue
-requests = queue.PriorityQueue()
-clock = 0
-network_length = 1
-received_permissions = 0
-
-own_queue_name = ''
-waiting_responses = False
+''' global variables '''
+requests = queue.PriorityQueue()                # thread-safe requests queue, automatically ordered by timestamps
+clock = 0                                       # logical clock used by Lamport Algorithm
+network_size = 1                                # number of nodes in the system
+received_permissions = 0                        # global counter: number of received permissions for the actual request
+node_id = ''                                    # identifier of this node in the system
 
 
-'''
-Requesting process
-
-    1- Pushing its request in its own queue (ordered by time stamps)
-    2- Sending a request to every node.
-    3- Waiting for replies from all other nodes.
-    4- If own request is at the head of its queue and all replies have been received, enter critical section.
-    5- Upon exiting the critical section, remove its request from the queue and send a release message to every process.
-'''
-
-
+# simulate a critical section usage;
+# it can be replaced by any function that really uses a critical section;
 def simulate_critical_section_usage(seconds):
     print('ENTER critical section for', seconds, 'seconds')
     for i in range(0, seconds):
@@ -53,6 +43,7 @@ def simulate_critical_section_usage(seconds):
     print('EXIT critical section')
 
 
+# increment global variable clock
 def increment_clock():
     global clock
     clock += 1
@@ -60,193 +51,178 @@ def increment_clock():
         print(DEBUG_FLAG, "[CLOCK] incremented clock to", clock)
 
 
+# return True if, and only if, all the necessary permissions for the last request have been received
+def node_has_permissions():
+    return received_permissions == (network_size-1)
+
+
+# put a request in node's request queue
 def requests_put(request):
     requests.put_nowait(request)
     print(DEBUG_FLAG, '[PUT]', request)
     pprint(requests.queue)
 
 
+# get the first request from node's request queue
 def requests_get():
     req = requests.get()  # equivalent to get(False)
     print(DEBUG_FLAG, '[GET]', req)
     pprint(requests.queue)
     return req
 
-'''
-    # reply_to => the queue who triggered the request (and should receive the response)
-    # timestamp (int) => timestamp of the request
-'''
 
-
+# send a message where the body is msg_type;
+# if the message is_broadcast, the message is sent in broadcast and routing_key is ignored;
+# else, the message is sent individually and routing_key should be the receiver id;
 def send_msg(msg_type, routing_key, is_broadcast=False):
+    # timestamp (int)   => the clock that the sender had in the moment it sent the message
+    # reply_to (string) => the id of the sender
+    props = pika.BasicProperties(reply_to=node_id, timestamp=clock,)
+
+    channel.confirm_delivery()  # TODO: need to test this line
+
     exchange = BROADCAST if is_broadcast else ''
-    props = pika.BasicProperties(reply_to=own_queue_name, timestamp=clock,)
-    channel.confirm_delivery()
     channel.basic_publish(exchange=exchange, routing_key=routing_key, body=msg_type, properties=props)
     if DEBUG:
         print(DEBUG_FLAG, '[SEND] msg: %s, timestamp: %s, routing_key: %s' % (msg_type, clock, routing_key))
 
 
+# trigger a request according to the steps of Lamport algorithm
 def send_request(access_duration):
-    global requests
-
-    # increment timestamp before creating request
+    # increment timestamp before creating a request
     increment_clock()
 
-    # 1- push request to own queue
-    request = Request(clock, own_queue_name, access_duration)
+    # push request to own queue
+    request = Request(clock, node_id, access_duration)
     requests_put(request)
 
-    # 2- broadcast request msg
-    send_msg(MSG_REQUEST, own_queue_name, True)
+    # broadcast request msg
+    send_msg(MSG_REQUEST, node_id, True)
 
 
-# process next element in the queue
-def process_next_element():
-    if requests.empty():
-        return
-
-    req = requests_get()
-    # if node is the owner, enter in CS, else, send permission
-    if req.owner_name == own_queue_name:
-        if received_permissions == (network_length - 1):
-            use_critical_section(req)
-        else:
-            requests_put(req)
-    else:
-        send_msg(MSG_PERMISSION_GRANTED, req.owner_name)
-        requests_put(req)
-
-
-def use_critical_section(request):
-    global waiting_responses
-    global received_permissions
-
-    waiting_responses = False
-    received_permissions = 0
-
-    simulate_critical_section_usage(request.access_duration)
-
-    # warn other clients that the use of CS is over
-    send_msg(MSG_RELEASE, own_queue_name, True)
-
-    process_next_element()
-
-
-'''
-1- After receiving a request, pushing the request in its own request queue (ordered by time stamps) and reply with a time stamp.
-2- After receiving release message, remove the corresponding request from its own request queue.
-3- If own request is at the head of its queue and all replies have been received, enter critical section.
-'''
-def receive_data():
-    def callback(ch, method, props, body):
-        global waiting_responses
-        global requests
-        global clock
-        global network_length
-        global received_permissions
-
-        sender_name = props.reply_to
-
-        # ignore own messages
-        if sender_name == own_queue_name:
-            return
-
-        # decode message
-        msg_type = body.decode('UTF-8')
-        msg_timestamp = props.timestamp
-
-        if DEBUG:
-            print(DEBUG_FLAG, "[RECEIVE] msg: %r, timestamp: %s, sender: %r" % (body, msg_timestamp, sender_name))
-
-        # recalculate clock
-        clock = max(clock, msg_timestamp)
-        increment_clock()
-
-        if msg_type == MSG_REQUEST:
-            # put received request in requests queue
-            request = Request(msg_timestamp, sender_name)
-            requests_put(request)
-
-            # get first element from queue
-            first_request = requests_get()
-
-            # accept or refuse request
-            if first_request.timestamp == msg_timestamp:
-                response_msg = MSG_PERMISSION_GRANTED
-                # send response
-                send_msg(response_msg, props.reply_to)
-
-            # put element back on queue
-            requests_put(first_request)
-
-        elif msg_type == MSG_RELEASE:
-            # remove first element from queue, since it was released by its owner
-            if not requests.empty():
-                requests_get()
-
-            process_next_element()
-
-        elif msg_type == MSG_NETWORK_LENGTH_REQUEST:
-            network_length += 1
-            print("[NETWORK] New client on the system:", network_length, 'clients')
-            # respond with ack
-            send_msg(MSG_NETWORK_LENGTH_ACK, props.reply_to)
-
-        elif msg_type == MSG_NETWORK_LENGTH_ACK:
-            network_length += 1
-
-        elif msg_type == MSG_PERMISSION_GRANTED:
-            # after receiving all responses, stop waiting
-            received_permissions += 1
-            print(DEBUG_FLAG, '[PERMISSION]', received_permissions)
-
-            if received_permissions == (network_length-1):
-                # get first element from queue and check if its correct before continuing
-                req = requests_get()
-                if req.owner_name == own_queue_name:
-                    use_critical_section(req)
-
-    # start to listen to messages
-    channel.basic_consume(callback, queue=own_queue_name, no_ack=True)
-    channel.start_consuming()
-
-
-# used by user interface thread
+# infinite looping to read keyboard inputs and treat them as requests
 def read_keyboard():
-    global waiting_responses
-
     print("Type requests to send: \t")
-
     while 1:
         try:
             user_input = input("")
-            # ignore messages when waiting responses
-            #if waiting_responses:
-            #    print("Request ignored: waiting responses for last request")
-            #    continue
             request_time = int(user_input)
             # send request and wait for responses
             send_request(request_time)
-            waiting_responses = True
         except ValueError:
             print("Your request should be an integer")
             continue
 
 
-def run_threads():
-    # start a thread to receive messages
-    receiver_thread = threading.Thread(target=receive_data)
-    receiver_thread.daemon = True
-    receiver_thread.start()
+# process next request in node's queue;
+# if node is not the owner, send permission to owner;
+# if node is the owner and all permissions have been received, enter in CS;
+# else, put element again in queue and wait for permissions;
+def process_next_request():
+    # if there's no element to process, job is done
+    if requests.empty():
+        return
 
-    thread_user = threading.Thread(target=read_keyboard)
-    thread_user.daemon = True
-    thread_user.start()
+    req = requests_get()
 
-    # hang program execution
-    while 1:
-        sleep(10)
+    # node is not the owner
+    if req.owner_id != node_id:
+        send_msg(MSG_PERMISSION, req.owner_id)
+        requests_put(req)
+
+    # node is the owner and has all permissions
+    elif node_has_permissions():
+        enter_critical_section(req)
+
+    # there are some permissions missing, wait for them
+    else:
+        requests_put(req)
+
+
+# this function must only be called after receiving all permissions for a request;
+# the received_permissions global counter is reset to zero;
+# the thread enter in critical section and a release message is broadcast after finishing the usage of CS;
+# then, the following request is processed;
+def enter_critical_section(request):
+    global received_permissions
+    received_permissions = 0
+
+    simulate_critical_section_usage(request.access_duration)
+
+    # warn other nodes that the use of CS is over
+    send_msg(MSG_RELEASE, node_id, True)
+
+    process_next_request()
+
+
+# callback for main channel basic_consume
+# decode and process a received message
+def treat_received_data(ch, method, props, body):
+    global clock
+    global network_size
+    global received_permissions
+
+    # decode message attributes
+    sender_id, msg_type, msg_timestamp = props.reply_to, body.decode, props.timestamp
+
+    # ignore own broadcast messages
+    if sender_id == node_id:
+        return
+
+    if DEBUG:
+        print(DEBUG_FLAG, "[RECEIVE] msg: %r, timestamp: %s, sender: %r" % (body, msg_timestamp, sender_id))
+
+    # recalculate clock, according to Lamport Algorithm
+    clock = max(clock, msg_timestamp)
+    increment_clock()
+
+    # treat messages differently according to their types
+    if msg_type == MSG_REQUEST:
+        # put received request in requests queue
+        requests_put(Request(msg_timestamp, sender_id))
+
+        # get first element from queue
+        req = requests_get()
+
+        # if the received request is the first request in the queue, send a permission to its owner
+        if req.timestamp == msg_timestamp:
+            send_msg(MSG_PERMISSION, sender_id)
+
+        # put element back on queue
+        requests_put(req)
+
+    elif msg_type == MSG_RELEASE:
+        # remove first element from queue, since it was released by its owner
+        if not requests.empty():
+            requests_get()
+
+        process_next_request()
+
+    elif msg_type == MSG_NETWORK_SIZE_REQUEST:
+        # a new node joined the system, add it to the network size counter
+        network_size += 1
+        print("[NETWORK] New node on the system:", network_size, 'nodes')
+
+        # answer message with ack
+        send_msg(MSG_NETWORK_SIZE_ACK, sender_id)
+
+    elif msg_type == MSG_NETWORK_SIZE_ACK:
+        # someone answered the request, add it to the network size counter
+        network_size += 1
+
+    elif msg_type == MSG_PERMISSION:
+        # after receiving all permissions, stop waiting
+        received_permissions += 1
+        print(DEBUG_FLAG, '[PERMISSION]', received_permissions)
+
+        if node_has_permissions():
+            # if the first request in the queue is from this node, process it
+            # else, ignore it and keep waiting for a release
+            req = requests_get()
+            if req.owner_id == node_id:
+                enter_critical_section(req)
+            else:
+                requests_put(req)
 
 
 if __name__ == '__main__':
@@ -255,19 +231,25 @@ if __name__ == '__main__':
     connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
     channel = connection.channel()
 
-    # connect to exchange broadcast
-    channel.exchange_declare(exchange=BROADCAST, exchange_type='fanout')
-
     # create own queue
     # exclusive tag is for deleting the queue when disconnecting
     result = channel.queue_declare(exclusive=True)
-    own_queue_name = result.method.queue
-    print("own queue name = %s", own_queue_name)
+    node_id = result.method.queue
+    print("own queue name = %s", node_id)
 
-    # bind own queue to exchange
-    channel.queue_bind(exchange=BROADCAST, queue=own_queue_name)
+    # connect to exchange broadcast
+    channel.exchange_declare(exchange=BROADCAST, exchange_type='fanout')
+    # bind own queue to exchange, so that node can received broadcast messages
+    channel.queue_bind(exchange=BROADCAST, queue=node_id)
 
-    # request network length
-    send_msg(MSG_NETWORK_LENGTH_REQUEST, own_queue_name, is_broadcast=True)
+    # create thread to read user inputs
+    thread_input = threading.Thread(target=read_keyboard)
+    thread_input.daemon = True
+    thread_input.start()
 
-    run_threads()
+    # calculate network size before creating any request
+    send_msg(MSG_NETWORK_SIZE_REQUEST, node_id, is_broadcast=True)
+
+    # start to listen to messages
+    channel.basic_consume(treat_received_data, queue=node_id, no_ack=True)
+    channel.start_consuming()
