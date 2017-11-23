@@ -5,11 +5,6 @@ from time import sleep
 
 import pika
 
-try:
-    from pprint import pprint
-except:
-    pprint = print
-
 from core import *
 
 # set as False to hide logs
@@ -61,7 +56,7 @@ def requests_put(request):
     requests.put_nowait(request)
     if DEBUG:
         print(DEBUG_FLAG, '[PUT]', request)
-        pprint(requests.queue)
+        print(requests.queue)
 
 
 # get the first request from node's request queue
@@ -69,7 +64,7 @@ def requests_get():
     req = requests.get()  # equivalent to get(False)
     if DEBUG:
         print(DEBUG_FLAG, '[GET]', req)
-        pprint(requests.queue)
+        print(requests.queue)
     return req
 
 
