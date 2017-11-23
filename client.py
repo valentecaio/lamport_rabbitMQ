@@ -13,7 +13,7 @@ except:
 from core import *
 
 # set as False to hide logs
-DEBUG = False
+DEBUG = True
 
 ''' constants '''
 DEBUG_FLAG = '[DEBUG]'                          # flag used in logs
@@ -61,7 +61,7 @@ def requests_put(request):
     requests.put_nowait(request)
     if DEBUG:
         print(DEBUG_FLAG, '[PUT]', request)
-        pprint(DEBUG_FLAG, requests.queue)
+        pprint(requests.queue)
 
 
 # get the first request from node's request queue
@@ -69,7 +69,7 @@ def requests_get():
     req = requests.get()  # equivalent to get(False)
     if DEBUG:
         print(DEBUG_FLAG, '[GET]', req)
-        pprint(DEBUG_FLAG, requests.queue)
+        pprint(requests.queue)
     return req
 
 
