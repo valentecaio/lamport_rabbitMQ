@@ -13,7 +13,7 @@ except:
 from core import *
 
 # set as False to hide logs
-DEBUG = True
+DEBUG = False
 
 ''' constants '''
 DEBUG_FLAG = '[DEBUG]'                          # flag used in logs
@@ -37,7 +37,7 @@ node_id = ''                                    # identifier of this node in the
 # it can be replaced by any function that really uses a critical section;
 def simulate_critical_section_usage(seconds):
     print('ENTER critical section for', seconds, 'seconds')
-    for i in range(0, seconds):
+    for i in range(1, seconds+1):
         sleep(1)
         print('work done: ' + str(int(100*(i/seconds))) + '%')
     print('EXIT critical section')
@@ -59,15 +59,17 @@ def node_has_permissions():
 # put a request in node's request queue
 def requests_put(request):
     requests.put_nowait(request)
-    print(DEBUG_FLAG, '[PUT]', request)
-    pprint(requests.queue)
+    if DEBUG:
+        print(DEBUG_FLAG, '[PUT]', request)
+        pprint(DEBUG_FLAG, requests.queue)
 
 
 # get the first request from node's request queue
 def requests_get():
     req = requests.get()  # equivalent to get(False)
-    print(DEBUG_FLAG, '[GET]', req)
-    pprint(requests.queue)
+    if DEBUG:
+        print(DEBUG_FLAG, '[GET]', req)
+        pprint(DEBUG_FLAG, requests.queue)
     return req
 
 
@@ -163,7 +165,7 @@ def treat_received_data(ch, method, props, body):
     global received_permissions
 
     # decode message attributes
-    sender_id, msg_type, msg_timestamp = props.reply_to, body.decode, props.timestamp
+    sender_id, msg_type, msg_timestamp = props.reply_to, body.decode('UTF-8'), props.timestamp
 
     # ignore own broadcast messages
     if sender_id == node_id:
@@ -213,9 +215,11 @@ def treat_received_data(ch, method, props, body):
     elif msg_type == MSG_PERMISSION:
         # after receiving all permissions, stop waiting
         received_permissions += 1
-        print(DEBUG_FLAG, '[PERMISSION]', received_permissions)
+        if DEBUG:
+            print(DEBUG_FLAG, '[PERMISSION]', received_permissions)
 
         if node_has_permissions():
+            print('All the permissions were received')
             # if the first request in the queue is from this node, process it
             # else, ignore it and keep waiting for a release
             req = requests_get()
