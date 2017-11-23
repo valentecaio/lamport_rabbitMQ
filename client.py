@@ -81,8 +81,6 @@ def send_msg(msg_type, routing_key, is_broadcast=False):
     # reply_to (string) => the id of the sender
     props = pika.BasicProperties(reply_to=node_id, timestamp=clock,)
 
-    channel.confirm_delivery()  # TODO: need to test this line
-
     exchange = BROADCAST if is_broadcast else ''
     channel.basic_publish(exchange=exchange, routing_key=routing_key, body=msg_type, properties=props)
     if DEBUG:
@@ -90,7 +88,7 @@ def send_msg(msg_type, routing_key, is_broadcast=False):
 
 
 # trigger a request according to the steps of Lamport algorithm
-def send_request(access_duration):
+def create_request(access_duration):
     # increment timestamp before creating a request
     increment_clock()
 
@@ -110,7 +108,7 @@ def read_keyboard():
             user_input = input("")
             request_time = int(user_input)
             # send request and wait for responses
-            send_request(request_time)
+            create_request(request_time)
         except ValueError:
             print("Your request should be an integer")
             continue
@@ -193,6 +191,22 @@ def treat_received_data(ch, method, props, body):
         # put element back on queue
         requests_put(req)
 
+    elif msg_type == MSG_PERMISSION:
+        received_permissions += 1
+        if DEBUG:
+            print(DEBUG_FLAG, '[PERMISSION]', received_permissions)
+
+        # after receiving all permissions, stop waiting
+        if node_has_permissions():
+            print('All the permissions were received')
+            # if the first request in the queue is from this node, process it
+            # else, ignore it and keep waiting for a release
+            req = requests_get()
+            if req.owner_id == node_id:
+                enter_critical_section(req)
+            else:
+                requests_put(req)
+
     elif msg_type == MSG_RELEASE:
         # remove first element from queue, since it was released by its owner
         if not requests.empty():
@@ -212,22 +226,6 @@ def treat_received_data(ch, method, props, body):
         # someone answered the request, add it to the network size counter
         network_size += 1
 
-    elif msg_type == MSG_PERMISSION:
-        # after receiving all permissions, stop waiting
-        received_permissions += 1
-        if DEBUG:
-            print(DEBUG_FLAG, '[PERMISSION]', received_permissions)
-
-        if node_has_permissions():
-            print('All the permissions were received')
-            # if the first request in the queue is from this node, process it
-            # else, ignore it and keep waiting for a release
-            req = requests_get()
-            if req.owner_id == node_id:
-                enter_critical_section(req)
-            else:
-                requests_put(req)
-
 
 if __name__ == '__main__':
     # start connection
@@ -239,7 +237,7 @@ if __name__ == '__main__':
     # exclusive tag is for deleting the queue when disconnecting
     result = channel.queue_declare(exclusive=True)
     node_id = result.method.queue
-    print("own queue name = %s", node_id)
+    print("node name = %s", node_id)
 
     # connect to exchange broadcast
     channel.exchange_declare(exchange=BROADCAST, exchange_type='fanout')
