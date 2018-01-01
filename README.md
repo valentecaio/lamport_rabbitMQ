@@ -1,7 +1,9 @@
 # Lamport's Algorithm Implementation
 
 That's a distributed implementation of Lamport's Algorithm for Mutual Exclusion, written in python 3 using pika rabbitMQ library.
+
 Even if the nodes are launched in the same machine, they receive different ports.
+
 The system simulates a situation where multiple processes (from different machines or not) try to access a shared resource, that may only be used by one node at a time.
 
 Full documentation at: [Repport]
@@ -33,11 +35,14 @@ After the node is connected, type a integer x to create a request of x seconds.
 This implementation has the following limitations, that may be respected to avoid deadlock situations.
 
 1- At least two clients must be running before the first request is sent.
+
 2- A node can only join the system if the queues of all the others nodes are empty.
+
 3- No node shall leave the system.
 
 
 ### Silent Mode
+
 To hide debug logs so the terminal only shows the critical section being used, open node.py and change the global constant DEBUG to False.
 
 [Repport]: <https://drive.google.com/open?id=1IJca8i3aw37f202tzBq5syTYBI5Qfsq1QPfp_DXd6BA>
