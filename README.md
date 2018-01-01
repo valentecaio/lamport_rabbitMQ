@@ -20,12 +20,15 @@ Full documentation at: [Repport]
 
 There are some usage examples on the [Repport], but, to start:
 
-1- Launch a node:
+1- Install [RabbitMQ] and run a server on localhost.
+
+2- Launch a node:
 ```sh
 python node.py
 ```
 
-2- Broadcast request message:
+3- Broadcast request message:
+
 After the node is connected, type a integer x to create a request of x seconds.
 
 
@@ -46,3 +49,4 @@ This implementation has the following limitations, that may be respected to avoi
 To hide debug logs so the terminal only shows the critical section being used, open node.py and change the global constant DEBUG to False.
 
 [Repport]: <https://drive.google.com/open?id=1IJca8i3aw37f202tzBq5syTYBI5Qfsq1QPfp_DXd6BA>
+[RabbitMQ]: <https://www.rabbitmq.com/>
