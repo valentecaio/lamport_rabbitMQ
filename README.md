@@ -22,12 +22,17 @@ There are some usage examples on the [Repport], but, to start:
 
 1- Install [RabbitMQ] and run a server on localhost.
 
-2- Launch a node:
+2- Install dependecies
+```sh
+pip3 install -r requirements.txt
+```
+
+3- Launch a node:
 ```sh
 python node.py
 ```
 
-3- Broadcast request message:
+4- Broadcast request message:
 
 After the node is connected, type a integer x to create a request of x seconds.
 
